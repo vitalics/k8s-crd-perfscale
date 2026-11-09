@@ -1,0 +1,203 @@
+# Migration of HariKube's k6_custom_resource_6_read_write.js to perfscale's
+# native YAML engine. One iteration = 6 creates + 6 label-selector reads of
+# Crossplane GCP custom resources against the Kubernetes API.
+#
+# The k6 script builds `name` once per iteration and reuses it in all 12
+# requests. perfscale generators are evaluated per message (the keyed
+# ${random.uuid4(id)} is shared within one body), so the name is generated
+# once — in the first POST — and every
+# later step reads it back from that response: ${{ address.body.metadata.name }}.
+steps:
+  - name: create Address
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/addresses"
+      insecure: true
+      headers: &headers
+        authorization: "Bearer ${{ env.API_TOKEN }}"
+        content-type: application/json
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1beta1
+        kind: Address
+        metadata:
+          name: "ps-${random.uuid4(id)}"
+          labels:
+            name: "ps-${random.uuid4(id)}"
+            created: "${now_ms}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"addressType": "EXTERNAL", "region": "us-east1"}, "providerConfigRef": {"name": "example"}}
+    check:
+      status: 201
+    outputs: address
+
+  - name: create Firewall
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1alpha1/firewalls"
+      insecure: true
+      headers: *headers
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1alpha1
+        kind: Firewall
+        metadata:
+          name: "${{ address.body.metadata.name }}"
+          labels:
+            name: "${{ address.body.metadata.name }}"
+            created: "${{ address.body.metadata.labels.created }}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"allowed": [{"IPProtocol": "tcp", "ports": ["80", "443"]}, {"IPProtocol": "icmp"}], "sourceRanges": ["10.0.0.0/24"], "networkRef": {"name": "example"}}, "providerConfigRef": {"name": "example"}}
+    check:
+      status: 201
+    outputs: firewall
+
+  - name: create GlobalAddress
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/globaladdresses"
+      insecure: true
+      headers: *headers
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1beta1
+        kind: GlobalAddress
+        metadata:
+          name: "${{ address.body.metadata.name }}"
+          labels:
+            name: "${{ address.body.metadata.name }}"
+            created: "${{ address.body.metadata.labels.created }}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"addressType": "INTERNAL", "purpose": "VPC_PEERING"}, "providerConfigRef": {"name": "example"}}
+    check:
+      status: 201
+    outputs: globaladdress
+
+  - name: create Network
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/networks"
+      insecure: true
+      headers: *headers
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1beta1
+        kind: Network
+        metadata:
+          name: "${{ address.body.metadata.name }}"
+          labels:
+            name: "${{ address.body.metadata.name }}"
+            created: "${{ address.body.metadata.labels.created }}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"autoCreateSubnetworks": false, "routingConfig": {"routingMode": "REGIONAL"}}, "providerConfigRef": {"name": "example"}}
+    check:
+      status: 201
+    outputs: network
+
+  - name: create Router
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1alpha1/routers"
+      insecure: true
+      headers: *headers
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1alpha1
+        kind: Router
+        metadata:
+          name: "${{ address.body.metadata.name }}"
+          labels:
+            name: "${{ address.body.metadata.name }}"
+            created: "${{ address.body.metadata.labels.created }}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"description": "A test router to verify provider-gcp changes", "region": "us-west1", "networkRef": {"name": "example"}, "nats": [{"name": "router-nat-1", "minPortsPerVm": 2, "natIpAllocateOption": "AUTO_ONLY", "sourceSubnetworkIpRangesToNat": "ALL_SUBNETWORKS_ALL_IP_RANGES"}]}, "providerConfigRef": {"name": "default"}}
+    check:
+      status: 201
+    outputs: router
+
+  - name: create Subnetwork
+    use: std/http@v1
+    with:
+      method: POST
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/subnetworks"
+      insecure: true
+      headers: *headers
+      body:
+        apiVersion: compute.gcp.crossplane.io/v1beta1
+        kind: Subnetwork
+        metadata:
+          name: "${{ address.body.metadata.name }}"
+          labels:
+            name: "${{ address.body.metadata.name }}"
+            created: "${{ address.body.metadata.labels.created }}"
+            created-by: perfscale
+            skip-controller-manager-metadata-caching: ""
+        spec: {"forProvider": {"region": "us-central1", "ipCidrRange": "192.168.0.0/24", "privateIpGoogleAccess": true, "secondaryIpRanges": [{"rangeName": "pods", "ipCidrRange": "10.128.0.0/20"}, {"rangeName": "services", "ipCidrRange": "172.16.0.0/16"}], "networkRef": {"name": "example"}}, "providerConfigRef": {"name": "example"}}
+    check:
+      status: 201
+    outputs: subnetwork
+
+  - name: list addresses
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/addresses?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
+
+  - name: list firewalls
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1alpha1/firewalls?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
+
+  - name: list globaladdresses
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/globaladdresses?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
+
+  - name: list networks
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/networks?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
+
+  - name: list routers
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1alpha1/routers?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
+
+  - name: list subnetworks
+    use: std/http@v1
+    with:
+      method: GET
+      url: "${{ env.API_ENDPOINT }}/apis/compute.gcp.crossplane.io/v1beta1/subnetworks?labelSelector=name=${{ address.body.metadata.name }}"
+      insecure: true
+      headers: *headers
+    check:
+      status: 200
