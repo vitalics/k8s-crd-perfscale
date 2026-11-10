@@ -1,0 +1,8 @@
+# HariKube challenge load: `make start` runs k6 with --vus=10
+# --iterations=100000 --duration=1h. perfscale has no iteration cap, so this
+# keeps the VUs and the 1h ceiling; override duration for a quick run.
+vus: 10
+duration: 1h
+libraries:
+  - use: '@std/random@v1'
+    capabilities: []
